@@ -1,0 +1,46 @@
+{
+  "name": "distexer",
+  "version": "0.1.0",
+  "description": "The headless STEM & math presentation engine for Discord bots: LaTeX → Unicode, auto-lists, match-the-following layouts and browser-free formula images.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "README.md"],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18.17"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": ["discord", "discord.js", "latex", "katex", "math", "unicode", "bot", "trivia", "stem", "chemistry"],
+  "author": "Saharsh",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Saharsh000/distexer.git",
+    "directory": "typescript"
+  },
+  "bugs": "https://github.com/Saharsh000/distexer/issues",
+  "homepage": "https://github.com/Saharsh000/distexer#readme",
+  "peerDependencies": {
+    "@resvg/resvg-js": "^2.6.0",
+    "mathjax-full": "^3.2.2"
+  },
+  "peerDependenciesMeta": {
+    "@resvg/resvg-js": { "optional": true },
+    "mathjax-full": { "optional": true }
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.4.0"
+  }
+}
