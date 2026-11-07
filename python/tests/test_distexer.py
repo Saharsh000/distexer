@@ -123,3 +123,16 @@ def test_new_question_types():
     layout2 = build_question("Statement I: Water boils. Statement II: Ice melts.", q_type="statements")
     assert layout2.q_type == "statements"
     assert "Statement I & II" in layout2.footer
+
+
+def test_horizontal_fraction_bar():
+    bar = distexer.format_fraction_bar("-b ± √(b² - 4ac)", "2a", prefix="x =")
+    assert "─" in bar
+    assert "x =" in bar
+
+    disp = distexer.format_text(r"Solve: $$x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}$$")
+    assert "─" in disp
+    assert "/" not in disp.split("\n")[1]  # Horizontal bar, no slash
+
+    dfrac = distexer.format_text(r"Value: $\dfrac{a + b}{c}$")
+    assert "─" in dfrac

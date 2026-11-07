@@ -560,10 +560,55 @@ def _format_math_spacing(s: str) -> str:
     return s.strip()
 
 
-def latex_to_unicode(expr: str) -> str:
+def format_fraction_bar(num: str, den: str, prefix: str = "", suffix: str = "") -> str:
+    """Format a fraction with a horizontal box-drawing bar across multiple lines.
+
+    Example:
+         -b ± √(b² − 4ac)
+    x = ──────────────────
+                2a
+    """
+    num = num.strip()
+    den = den.strip()
+    p_str = (prefix.strip() + " ") if prefix.strip() else ""
+    s_str = (" " + suffix.strip()) if suffix.strip() else ""
+    width = max(len(num), len(den)) + 2
+    bar = "─" * width
+    line_top = " " * len(p_str) + num.center(width)
+    line_mid = p_str + bar + s_str
+    line_bot = " " * len(p_str) + den.center(width)
+    return f"{line_top}\n{line_mid}\n{line_bot}"
+
+
+def _try_format_display_fraction(e: str) -> Optional[str]:
+    matches = list(re.finditer(r"\\(d?frac|cfrac)\b", e))
+    if len(matches) != 1:
+        return None
+    m = matches[0]
+    prefix = e[:m.start()].strip()
+    j = m.end()
+    num, j = _read_arg(e, j)
+    den, j = _read_arg(e, j)
+    suffix = e[j:].strip()
+    if not num or not den:
+        return None
+    conv_prefix = latex_to_unicode(prefix, display=False) if prefix else ""
+    conv_num = latex_to_unicode(num, display=False)
+    conv_den = latex_to_unicode(den, display=False)
+    conv_suffix = latex_to_unicode(suffix, display=False) if suffix else ""
+    return format_fraction_bar(conv_num, conv_den, prefix=conv_prefix, suffix=conv_suffix)
+
+
+def latex_to_unicode(expr: str, display: bool = False) -> str:
     """Transliterate a LaTeX math expression (without ``$``) to Unicode."""
     e = balance_braces(_DOUBLE_ESCAPE.sub(lambda _m: "\\", expr))
     e = e.replace("<=>", "⇌").replace("<->", "↔").replace("->", "→")
+
+    if display or "\\dfrac" in e or "\\cfrac" in e:
+        disp_frac = _try_format_display_fraction(e)
+        if disp_frac is not None:
+            return disp_frac
+
     out = _convert(e, in_math=True)
     out = _format_math_spacing(out)
     out = "\n".join(line.strip() for line in out.split("\n"))
@@ -656,7 +701,7 @@ def format_text(
             return f"\n{marker}\n" if display else marker
         if mode == MODE_PRESERVE_KATEX:
             return f"$${expr}$$" if display else f"${expr}$"
-        converted = latex_to_unicode(expr)
+        converted = latex_to_unicode(expr, display=display)
         return f"\n{converted}\n" if display else converted
 
     pieces: List[str] = []

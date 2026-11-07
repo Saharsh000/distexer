@@ -482,12 +482,51 @@ function formatMathSpacing(s: string): string {
   return res.replace(/[ \t\u2009]{2,}/g, " ").trim();
 }
 
+/** Format a fraction with a horizontal box-drawing bar across multiple lines. */
+export function formatFractionBar(num: string, den: string, prefix = "", suffix = ""): string {
+  const n = num.trim();
+  const d = den.trim();
+  const pStr = prefix.trim() ? `${prefix.trim()} ` : "";
+  const sStr = suffix.trim() ? ` ${suffix.trim()}` : "";
+  const width = Math.max(n.length, d.length) + 2;
+  const bar = "─".repeat(width);
+  const padN = Math.floor((width - n.length) / 2);
+  const lineTop = " ".repeat(pStr.length) + " ".repeat(padN) + n + " ".repeat(width - n.length - padN);
+  const lineMid = pStr + bar + sStr;
+  const padD = Math.floor((width - d.length) / 2);
+  const lineBot = " ".repeat(pStr.length) + " ".repeat(padD) + d + " ".repeat(width - d.length - padD);
+  return `${lineTop}\n${lineMid}\n${lineBot}`;
+}
+
+function tryFormatDisplayFraction(e: string): string | null {
+  const matches = Array.from(e.matchAll(/\\(d?frac|cfrac)\b/g));
+  if (matches.length !== 1) return null;
+  const m = matches[0];
+  const prefix = e.slice(0, m.index).trim();
+  let j = (m.index ?? 0) + m[0].length;
+  const [num, j2] = readArg(e, j);
+  const [den, j3] = readArg(e, j2);
+  const suffix = e.slice(j3).trim();
+  if (!num || !den) return null;
+  const convPrefix = prefix ? latexToUnicode(prefix, false) : "";
+  const convNum = latexToUnicode(num, false);
+  const convDen = latexToUnicode(den, false);
+  const convSuffix = suffix ? latexToUnicode(suffix, false) : "";
+  return formatFractionBar(convNum, convDen, convPrefix, convSuffix);
+}
+
 /** Transliterate a LaTeX math expression (without `$`) to Unicode. */
-export function latexToUnicode(expr: string): string {
+export function latexToUnicode(expr: string, display = false): string {
   const e = balanceBraces(expr.replace(DOUBLE_ESCAPE, "\\"))
     .replace(/<=>/g, "⇌")
     .replace(/<->/g, "↔")
     .replace(/->/g, "→");
+
+  if (display || /\\dfrac\b/.test(e) || /\\cfrac\b/.test(e)) {
+    const dispFrac = tryFormatDisplayFraction(e);
+    if (dispFrac !== null) return dispFrac;
+  }
+
   const out = formatMathSpacing(convert(e, true));
   return out
     .split("\n")
@@ -561,7 +600,7 @@ export function formatText(text: string, mode: Mode = MODE_UNICODE_NATIVE, optio
     } else if (mode === MODE_PRESERVE_KATEX) {
       out += display ? `$$${expr}$$` : `$${expr}$`;
     } else {
-      const u = latexToUnicode(expr);
+      const u = latexToUnicode(expr, display);
       out += display ? `\n${u}\n` : u;
     }
     last = start + m[0].length;

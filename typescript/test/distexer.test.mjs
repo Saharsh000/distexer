@@ -94,3 +94,12 @@ test("new question types", () => {
   assert.equal(layout2.qType, "statements");
   assert.ok(layout2.footer.includes("Statement I & II"));
 });
+
+test("horizontal fraction bars", () => {
+  const disp = formatText(String.raw`Solve: $$x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}$$`);
+  assert.ok(disp.includes("─"));
+  assert.ok(disp.includes("x ="));
+
+  const dfrac = formatText(String.raw`Value: $\dfrac{a + b}{c}$`);
+  assert.ok(dfrac.includes("─"));
+});
