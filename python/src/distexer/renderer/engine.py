@@ -262,8 +262,15 @@ def render_png(expr: str, **config: Any) -> io.BytesIO:
 
 
 def clean_card_mathtext(s: str) -> str:
-    """Normalize equations and chemistry tags for Matplotlib mathtext rendering."""
+    """Normalize equations, KaTeX tags, and chemistry for Matplotlib mathtext rendering."""
     s = s.replace("$$", "$")
+
+    # Replace \text{...}, \textrm{...}, \mbox{...} with \mathrm{...}
+    s = re.sub(
+        r"\\(?:text|textrm|operatorname|textnormal|mbox)\s*\{([^{}]*)\}",
+        lambda m: r"\mathrm{" + m.group(1).replace(" ", r"\ ") + "}",
+        s,
+    )
 
     # Convert \ce{...}
     def rep_ce(m: "re.Match[str]") -> str:
@@ -279,28 +286,32 @@ def clean_card_mathtext(s: str) -> str:
     s = re.sub(r"\\ge(?![a-z])", r"\\geq", s)
     s = re.sub(r"\\ne(?![a-z])", r"\\neq", s)
     s = re.sub(r"\\degree\b", r"^{\\circ}", s)
+    s = re.sub(r"\\(?:displaystyle|limits|nolimits)\b", "", s)
+    s = re.sub(r"\\implies\b", r"\\Rightarrow", s)
+    s = re.sub(r"\\iff\b", r"\\Leftrightarrow", s)
+    s = re.sub(r"\\(?:dots)\b", r"\\ldots", s)
     return s
 
 
-def wrap_text_with_math(text: str, max_chars: int = 52) -> List[str]:
+def wrap_text_with_math(text: str, max_chars: int = 48) -> List[str]:
     """Break text into lines while keeping math tokens atomic."""
-    raw_tokens: List[str] = []
+    tokens: List[str] = []
     pattern = re.compile(r"(\$[^\$]+\$|\S+)")
     for m in pattern.finditer(text):
-        raw_tokens.append(m.group(0))
+        tokens.append(m.group(0))
 
     # Merge isolated punctuation with preceding token
-    tokens: List[str] = []
-    for tok in raw_tokens:
-        if tokens and tok in (",", ".", ";", ":", "?", "!"):
-            tokens[-1] += tok
+    merged: List[str] = []
+    for tok in tokens:
+        if merged and tok in (",", ".", ";", ":", "?", "!"):
+            merged[-1] += tok
         else:
-            tokens.append(tok)
+            merged.append(tok)
 
     lines: List[str] = []
     curr: List[str] = []
     curr_len = 0
-    for tok in tokens:
+    for tok in merged:
         vis = re.sub(r"\\[A-Za-z]+|\$|[{}]", "", tok)
         tok_len = max(len(vis), 1)
         if curr and (curr_len + tok_len + 1 > max_chars):
@@ -323,14 +334,17 @@ def render_question_card(
     chapter: str = "",
     fontsize: int = 22,
     dpi: int = 200,
-    bg_color: str = "#1E1F22",
-    text_color: str = "#FFFFFF",
-    max_chars: int = 52,
+    bg_color: str = "#18191C",
+    header_color: str = "#38BDF8",
+    divider_color: str = "#3F444E",
+    text_color: str = "#F3F4F6",
+    max_chars: int = 48,
 ) -> io.BytesIO:
     """Render a full textbook-style STEM question card (+ options) into a high-res PNG image.
 
-    Designed specifically for Discord embed images so mobile and desktop users
-    can read questions effortlessly without zooming.
+    Uses a dynamic layout and bounding-box measurement pass so that tall mathematical
+    expressions (such as integrals, square roots, and fractions with horizontal bars)
+    render with generous spacing and zero vertical overlap.
     """
     try:
         from matplotlib.backends.backend_agg import FigureCanvasAgg  # noqa: PLC0415
@@ -339,24 +353,21 @@ def render_question_card(
     except ImportError as exc:
         raise RenderError("matplotlib is required to render question cards (pip install matplotlib)") from exc
 
-    lines: List[str] = []
+    width_in = 9.5
+    margin_x = 0.5
+    content_w = width_in - (2 * margin_x)
 
-    # 1. Subject Header
-    hdr = "   •   ".join(p for p in (subject.upper(), chapter) if p)
-    if hdr:
-        lines.append(hdr)
-        lines.append("―" * 44)
-        lines.append("")
-
-    # 2. Question text wrapped
+    # 1. Prepare Question text lines
     q_clean = clean_card_mathtext(question)
-    q_wrapped = wrap_text_with_math(q_clean, max_chars=max_chars)
-    lines.extend(q_wrapped)
+    raw_paras = [p.strip() for p in q_clean.split("\n") if p.strip()]
+    q_lines: List[str] = []
+    for p in raw_paras:
+        q_lines.extend(wrap_text_with_math(p, max_chars=max_chars))
 
-    # 3. Options
+    # 2. Prepare Options
+    parsed_opts = []
+    all_short = True
     if options:
-        lines.append("")
-        lines.append("―" * 44)
         for opt in options:
             if isinstance(opt, dict):
                 k = opt.get("key", "")
@@ -366,37 +377,116 @@ def render_question_card(
             else:
                 k, txt = "", str(opt).strip()
             txt_clean = clean_card_mathtext(txt)
-            if txt_clean.startswith("$") and txt_clean.endswith("$"):
-                math_content = txt_clean[1:-1]
-                lines.append(rf"$\mathbf{{({k})}}\quad {math_content}$")
+            if len(txt_clean) > 28:
+                all_short = False
+            parsed_opts.append((k, txt_clean))
+
+    # 3. Measurement pass using an offscreen canvas
+    dummy_fig = Figure(figsize=(width_in, 25), dpi=dpi)
+    canvas = FigureCanvasAgg(dummy_fig)
+    d_ax = dummy_fig.add_axes([0, 0, 1, 1])
+
+    with matplotlib.rc_context({"mathtext.fontset": "cm"}):
+        r = canvas.get_renderer()
+
+        # Measure header
+        hdr_h = 0.0
+        hdr_parts = [p for p in (subject.upper(), chapter) if p]
+        if hdr_parts:
+            t = d_ax.text(0, 0, "   •   ".join(hdr_parts), fontsize=fontsize - 2, fontweight="bold")
+            hdr_h = (t.get_window_extent(r).height / dpi) + 0.15
+
+        # Measure question lines
+        q_items: List[tuple[str, float]] = []
+        for line in q_lines:
+            t = d_ax.text(0, 0, line, fontsize=fontsize)
+            lh = t.get_window_extent(r).height / dpi
+            # Breathing room based on height
+            gap = 0.22 if lh > 0.45 else 0.12
+            q_items.append((line, lh + gap))
+
+        # Measure options
+        opt_items: List[tuple[str, str, str, float]] = []
+        any_tall_opt = False
+        for k, txt in parsed_opts:
+            opt_str = rf"$\mathbf{{({k})}}\quad {txt[1:-1]}$" if (txt.startswith("$") and txt.endswith("$")) else rf"$\mathbf{{({k})}}\quad$ {txt}"
+            t = d_ax.text(0, 0, opt_str, fontsize=fontsize)
+            oh = t.get_window_extent(r).height / dpi
+            if oh > 0.50:
+                any_tall_opt = True
+            gap = 0.24 if oh > 0.45 else 0.14
+            opt_items.append((k, txt, opt_str, oh + gap))
+
+        use_grid = (len(parsed_opts) == 4 and all_short and not any_tall_opt)
+
+        # Compute total required figure height
+        total_h = 0.45  # top margin
+        if hdr_parts:
+            total_h += hdr_h + 0.35  # header + divider + spacing
+
+        total_h += sum(h for _, h in q_items)
+
+        if opt_items:
+            total_h += 0.35  # space + divider + spacing
+            if use_grid:
+                r0_h = max(opt_items[0][3], opt_items[1][3])
+                r1_h = max(opt_items[2][3], opt_items[3][3])
+                total_h += r0_h + r1_h
             else:
-                lines.append(rf"$\mathbf{{({k})}}\quad$ {txt_clean}")
+                total_h += sum(h for _, _, _, h in opt_items)
 
-    card_text = "\n".join(lines)
+        total_h += 0.40  # bottom margin
+        fig_height = max(2.5, total_h)
 
-    # Figure height directly proportional to line count
-    num_lines = len(lines)
-    fig_width = 9.5
-    fig_height = max(2.5, (num_lines * 0.32) + 0.6)
-
-    fig = Figure(figsize=(fig_width, fig_height), dpi=dpi)
+    # 4. Render Final Figure with exact coordinates
+    fig = Figure(figsize=(width_in, fig_height), dpi=dpi)
     FigureCanvasAgg(fig)
     ax = fig.add_axes([0, 0, 1, 1])
     ax.axis("off")
+    ax.set_xlim(0, width_in)
+    ax.set_ylim(0, fig_height)
     fig.patch.set_facecolor(bg_color)
 
     with matplotlib.rc_context({"mathtext.fontset": "cm"}):
-        ax.text(
-            0.05, 0.94, card_text,
-            color=text_color,
-            fontsize=fontsize,
-            va="top",
-            ha="left",
-            linespacing=1.65,
-        )
+        curr_y = fig_height - 0.45
+
+        # Render Header
+        if hdr_parts:
+            hdr_str = "   •   ".join(hdr_parts)
+            ax.text(margin_x, curr_y, hdr_str, fontsize=fontsize - 2, color=header_color, fontweight="bold", va="top")
+            curr_y -= hdr_h
+            ax.plot([margin_x, width_in - margin_x], [curr_y, curr_y], color=divider_color, lw=1.5)
+            curr_y -= 0.30
+
+        # Render Question Lines
+        for line, line_h in q_items:
+            ax.text(margin_x, curr_y, line, fontsize=fontsize, color=text_color, va="top")
+            curr_y -= line_h
+
+        # Render Options
+        if opt_items:
+            curr_y -= 0.10
+            ax.plot([margin_x, width_in - margin_x], [curr_y, curr_y], color=divider_color, lw=1.5)
+            curr_y -= 0.30
+
+            if use_grid:
+                col_w = content_w / 2
+                r0_h = max(opt_items[0][3], opt_items[1][3])
+                r1_h = max(opt_items[2][3], opt_items[3][3])
+                # Row 0
+                ax.text(margin_x, curr_y, opt_items[0][2], fontsize=fontsize, color=text_color, va="top")
+                ax.text(margin_x + col_w, curr_y, opt_items[1][2], fontsize=fontsize, color=text_color, va="top")
+                curr_y -= r0_h
+                # Row 1
+                ax.text(margin_x, curr_y, opt_items[2][2], fontsize=fontsize, color=text_color, va="top")
+                ax.text(margin_x + col_w, curr_y, opt_items[3][2], fontsize=fontsize, color=text_color, va="top")
+            else:
+                for _, _, opt_str, opt_h in opt_items:
+                    ax.text(margin_x, curr_y, opt_str, fontsize=fontsize, color=text_color, va="top")
+                    curr_y -= opt_h
 
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", facecolor=bg_color, bbox_inches="tight", pad_inches=0.3)
+    fig.savefig(buf, format="png", facecolor=bg_color, bbox_inches="tight", pad_inches=0.35)
     buf.seek(0)
     return buf
 
@@ -409,9 +499,11 @@ async def arender_question_card(
     chapter: str = "",
     fontsize: int = 22,
     dpi: int = 200,
-    bg_color: str = "#1E1F22",
-    text_color: str = "#FFFFFF",
-    max_chars: int = 52,
+    bg_color: str = "#18191C",
+    header_color: str = "#38BDF8",
+    divider_color: str = "#3F444E",
+    text_color: str = "#F3F4F6",
+    max_chars: int = 48,
 ) -> io.BytesIO:
     """Async version of :func:`render_question_card` (runs off-thread)."""
     return await asyncio.to_thread(
@@ -423,6 +515,8 @@ async def arender_question_card(
         fontsize=fontsize,
         dpi=dpi,
         bg_color=bg_color,
+        header_color=header_color,
+        divider_color=divider_color,
         text_color=text_color,
         max_chars=max_chars,
     )
