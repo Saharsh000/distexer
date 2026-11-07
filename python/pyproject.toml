@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "distexer"
-version = "0.1.0"
+version = "0.2.0"
 description = "The headless STEM & math presentation engine for Discord bots: LaTeX → Unicode, auto-lists, match-the-following layouts and browser-free formula images."
 readme = "README.md"
 requires-python = ">=3.9"
