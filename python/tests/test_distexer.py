@@ -62,3 +62,64 @@ def test_complex_math_collected():
     assert layout.formulas == [r"x = \frac{-b \pm \sqrt{b^2-4ac}}{2a}"]
     assert "`[equation ↓]`" in layout.body
     assert layout.options == ["🇦  1", "🇧  2"]
+
+
+def test_textbook_math_spacing():
+    assert u("x+y=z") == "x + y = z"
+    assert u("f(x)=x^2-4x+4") == "f(x) = x² - 4x + 4"
+    assert u(r"a < b \le c > d \ge e") == "a < b ≤ c > d ≥ e"
+    assert u(r"2x+3y=5") == "2x + 3y = 5"
+    assert u(r"x=-5") == "x = -5"
+
+
+def test_textbook_calculus_and_limits():
+    assert u(r"\lim_{x \to 0} \frac{\sin x}{x} = 1") == "lim (x → 0) (sin x)/x = 1"
+    assert u(r"\lim_{n \to \infty} \left(1 + \frac{1}{n}\right)^n = e") == "lim (n → ∞) (1 + 1/n)ⁿ = e"
+    assert u(r"\frac{d}{dx}(x^n) = nx^{n-1}") == "d/dx(xⁿ) = nxⁿ⁻¹"
+    assert u(r"\frac{\partial u}{\partial x} + \frac{\partial u}{\partial y} = 0") == "∂u/∂x + ∂u/∂y = 0"
+    assert u(r"\frac{\Delta y}{\Delta x}") == "Δy/Δx"
+    assert u(r"\sum_{i=1}^{n} i = \frac{n(n+1)}{2}") == "∑ᵢ₌₁ⁿ i = n(n + 1)/2"
+    assert u(r"\int_{0}^{1} x \, dx = \frac{1}{2}") == "∫₀¹ x dx = ½"
+
+
+def test_no_backslashes_in_subscripts_and_vectors():
+    res = distexer.format_text(r"Values: $k_B T$, $N_A$, $K_{eq}$, and $\lambda_{1,2}$.")
+    assert r"\_" not in res
+    assert "k_B T" in res
+    assert "N_A" in res
+    assert "K_(eq)" in res
+    assert "λ₁, ₂" in res
+
+    vec = u(r"\vec{v} = v_x \hat{i} + v_y \hat{j} + v_z \hat{k}")
+    assert r"\_" not in vec
+    assert "v⃗ = vₓ î + v_y ĵ + v_z k̂" == vec
+
+
+def test_greek_without_eating_spaces():
+    text = r"The value of \alpha + \beta is 5 and \theta is 45^\circ."
+    formatted = distexer.format_text(text)
+    assert "β is 5" in formatted
+    assert "θ is 45°" in formatted
+    assert "βis" not in formatted
+    assert "θis" not in formatted
+
+
+def test_cases_and_delimiters():
+    assert u(r"|x| = \begin{cases} x & x \ge 0 \\ -x & x < 0 \end{cases}") == "|x| = {x, x ≥ 0; -x, x < 0}"
+    assert u(r"\left( \frac{a+b}{c} \right)^2") == "((a + b)/c)²"
+
+
+def test_enhanced_chemistry():
+    assert u(r"\ce{CuSO4 . 5H2O}") == "CuSO₄ · 5H₂O"
+    assert u(r"\ce{Fe^{2+} + e- -> Fe^{3+}}") == "Fe²⁺ + e⁻ → Fe³⁺"
+    assert u(r"\ce{CaCO3 ->[\Delta] CaO + CO2}") == "CaCO₃ → [Δ] CaO + CO₂"
+
+
+def test_new_question_types():
+    layout1 = build_question("Assertion (A): Ice floats. Reason (R): Less dense.", q_type="assertion_reason")
+    assert layout1.q_type == "assertion_reason"
+    assert "Assertion & Reason" in layout1.footer
+
+    layout2 = build_question("Statement I: Water boils. Statement II: Ice melts.", q_type="statements")
+    assert layout2.q_type == "statements"
+    assert "Statement I & II" in layout2.footer

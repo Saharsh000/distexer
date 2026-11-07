@@ -223,19 +223,50 @@ def _script(text: str, sup: bool) -> str:
     mapped = to_superscript(t) if sup else to_subscript(t)
     if mapped is not None:
         return mapped
+    if not sup and "→" in t:
+        return f" ({t})"
     wrapped = t if len(t) == 1 else f"({t})"
-    # "\_" so Discord doesn't turn the rest of the line into italics
-    return ("^" if sup else "\\_") + wrapped
+    return ("^" if sup else "_") + wrapped
 
 
 def _is_loose_atomic(text: str) -> bool:
-    return bool(text) and not any(ch.isspace() or ch in _OPERATOR_CHARS for ch in text)
+    t = text.strip()
+    if not t:
+        return False
+    # If already enclosed in matched parentheses: (a+b) or (a/b)
+    if t.startswith("(") and t.endswith(")"):
+        depth = 0
+        balanced = True
+        for idx, ch in enumerate(t):
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0 and idx < len(t) - 1:
+                    balanced = False
+                    break
+        if balanced and depth == 0:
+            return True
+    # Factorized products like n(n+1) or (a+b)(c+d)
+    if re.fullmatch(r"(\w+|\([^)]+\))(\([^)]+\))+", t):
+        return True
+    # Differentials and derivatives like ∂u, ∂²u, dy, d²y, Δx
+    if re.fullmatch(r"[∂dΔ]\w*(?:²|³|ⁿ)?", t):
+        return True
+    return not any(ch.isspace() or ch in _OPERATOR_CHARS for ch in t)
 
 
 def _is_strict_atomic(text: str) -> bool:
-    if re.fullmatch(r"\d+(?:\.\d+)?", text):
+    t = text.strip()
+    if re.fullmatch(r"\d+(?:\.\d+)?", t):
         return True
-    return len(text) >= 1 and text[0] not in _OPERATOR_CHARS and all(ch in _SCRIPT_CHARS for ch in text[1:])
+    # Differentials like dx, dt, dr, dy, ∂x, ∂t, Δx, Δt
+    if re.fullmatch(r"[d∂Δ][a-zA-Z](?:²|³|ⁿ)?", t):
+        return True
+    # Single variable
+    if len(t) == 1 and t not in _OPERATOR_CHARS:
+        return True
+    return len(t) >= 1 and t[0] not in _OPERATOR_CHARS and all(ch in _SCRIPT_CHARS for ch in t[1:])
 
 
 def _fraction(num: str, den: str) -> str:
@@ -277,21 +308,34 @@ def _bold(text: str) -> str:
     return "".join(out)
 
 
-def _accent(text: str, mark: str) -> str:
+def _accent(text: str, mark: str, name: str = "") -> str:
     if not text:
         return ""
+    if name == "hat":
+        if text == "i":
+            return "î"
+        if text == "j":
+            return "ĵ"
+        if text == "k":
+            return "k̂"
     if mark in ("\u0305", "\u0332", "\u0338"):  # overline / underline / cancel span everything
         return "".join(ch + mark for ch in text)
     return text + mark
 
 
 def _chem(arg: str) -> str:
-    """Minimal mhchem (``\\ce{}``) support."""
+    """Enhanced mhchem (``\\ce{}``) support."""
     t = arg
+    # Hydrates: CuSO4 . 5H2O or CuSO4 * 5H2O
+    t = re.sub(r"\s*[.*]\s*(?=\d*H2O|\d*[A-Z])", " · ", t)
+    # Reaction arrows with conditions: ->[\Delta] or ->[heat]
+    t = re.sub(r"->\[([^\]]+)\]", lambda m: r" —" + m.group(1).replace(r"\Delta", "Δ") + r"→ ", t)
     t = t.replace("<=>", r"\rightleftharpoons ").replace("<->", r"\leftrightarrow ")
     t = t.replace("->", r"\to ").replace("<-", r"\gets ")
+    # Subscripts for chemical formulas: H2O -> H_{2}O, (OH)2 -> (OH)_{2}
     t = re.sub(r"(?<=[A-Za-z)\]])(\d+)", lambda m: "_{" + m.group(1) + "}", t)
-    t = re.sub(r"(?<=[A-Za-z)\]}])(\d*[+-])(?=\s|$)", lambda m: "^{" + m.group(1) + "}", t)
+    # Charges and ions: Fe^{2+}, SO4^{2-}, H+, OH-, e-
+    t = re.sub(r"(?<=[A-Za-z)\]}])(\d*[+-])(?=\s|$|[+→⇌])", lambda m: "^{" + m.group(1) + "}", t)
     return _convert(t)
 
 
@@ -307,7 +351,20 @@ def _environment(env: str, body: str) -> str:
         left, right = MATRIX_DELIMS[base]
         return left + "; ".join(", ".join(row) for row in cells) + right
     if base in ("cases", "dcases", "rcases"):
-        return "{ " + "; ".join(" ".join(c for c in row if c) for row in cells) + " }"
+        formatted_rows = []
+        for row in cells:
+            if not row:
+                continue
+            if len(row) == 1:
+                formatted_rows.append(row[0])
+            elif len(row) >= 2:
+                expr_part = row[0].strip()
+                cond_part = " ".join(c.strip() for c in row[1:] if c.strip())
+                if expr_part.endswith(",") or cond_part.startswith("if ") or cond_part.startswith("for "):
+                    formatted_rows.append(f"{expr_part}  {cond_part}".strip())
+                else:
+                    formatted_rows.append(f"{expr_part},  {cond_part}".strip())
+        return "{ " + "; ".join(formatted_rows) + " }"
     return "\n".join(" ".join(c for c in row if c) for row in cells)
 
 
@@ -328,7 +385,7 @@ def _find_env_end(s: str, j: int, env: str) -> Tuple[str, int]:
         k = ne + len(end_tok)
 
 
-def _command(name: str, s: str, j: int) -> Tuple[str, int]:
+def _command(name: str, s: str, j: int, in_math: bool = True) -> Tuple[str, int]:
     """Convert ``\\name`` (already consumed up to ``j``) and return (text, new_index)."""
     if name in _FRAC_COMMANDS:
         num, j = _read_arg(s, j)
@@ -344,7 +401,7 @@ def _command(name: str, s: str, j: int) -> Tuple[str, int]:
         return _sqrt(_convert(index) if index is not None else None, _convert(radicand)), j
     if name in _TEXT_COMMANDS:
         arg, j = _read_arg(s, j)
-        return (arg if name.startswith("text") or name == "mbox" else _convert(arg)), j
+        return _convert(arg), j
     if name in _BOLD_COMMANDS:
         arg, j = _read_arg(s, j)
         return _bold(_convert(arg)), j
@@ -353,7 +410,7 @@ def _command(name: str, s: str, j: int) -> Tuple[str, int]:
         return "".join(BLACKBOARD.get(ch, ch) for ch in arg.strip()), j
     if name in ACCENTS:
         arg, j = _read_arg(s, j)
-        return _accent(_convert(arg).strip(), ACCENTS[name]), j
+        return _accent(_convert(arg).strip(), ACCENTS[name], name), j
     if name in ("ce", "pu"):
         arg, j = _read_arg(s, j)
         return _chem(arg), j
@@ -393,16 +450,32 @@ def _command(name: str, s: str, j: int) -> Tuple[str, int]:
         return "", j
     if name in IGNORED:
         if name in ("left", "right", "middle") or name.startswith(("big", "Big")):
+            while j < len(s) and s[j] == " ":
+                j += 1
             if j < len(s) and s[j] == ".":
                 j += 1
         return "", j
     if name in ("bmod", "mod"):
         return " mod ", j
+    if name == "partial":
+        if in_math and j < len(s) and s[j] == " ":
+            if j + 1 < len(s) and s[j + 1].isalpha():
+                j += 1
+        return "∂", j
+    if name == "Delta":
+        if in_math and j < len(s) and s[j] == " ":
+            if j + 1 < len(s) and s[j + 1].isalpha() and (s[j + 1].isupper() or (j + 2 >= len(s) or not s[j + 2].isalpha())):
+                j += 1
+        return "Δ", j
+    if name == "nabla":
+        if in_math and j < len(s) and s[j] == " ":
+            if j + 1 < len(s) and s[j + 1].isalpha() and (j + 2 >= len(s) or not s[j + 2].isalpha()):
+                j += 1
+        return "∇", j
     if name in FUNCTIONS:
         return name, j
     if name in GREEK:
-        # "\Delta H" -> "ΔH"
-        if j + 1 < len(s) and s[j] == " " and s[j + 1].isalnum():
+        if in_math and j + 1 < len(s) and s[j] == " " and s[j + 1].isalpha() and (j + 2 >= len(s) or not s[j + 2].isalpha()):
             j += 1
         return GREEK[name], j
     if name in SYMBOLS:
@@ -410,7 +483,7 @@ def _command(name: str, s: str, j: int) -> Tuple[str, int]:
     return name, j
 
 
-def _convert(s: str) -> str:
+def _convert(s: str, in_math: bool = True) -> str:
     out: List[str] = []
     i, n = 0, len(s)
     while i < n:
@@ -420,7 +493,7 @@ def _convert(s: str) -> str:
                 j = i + 1
                 while j < n and s[j].isalpha():
                     j += 1
-                text, i = _command(s[i + 1:j], s, j)
+                text, i = _command(s[i + 1:j], s, j, in_math=in_math)
                 out.append(text)
                 continue
             if i + 1 < n:
@@ -431,11 +504,11 @@ def _convert(s: str) -> str:
             continue
         if char in "^_":
             arg, i = _read_arg(s, i + 1)
-            out.append(_script(_convert(arg), sup=char == "^"))
+            out.append(_script(_convert(arg, in_math=in_math), sup=char == "^"))
             continue
         if char == "{":
             content, i = _read_group(s, i)
-            out.append(_convert(content))
+            out.append(_convert(content, in_math=in_math))
             continue
         if char == "}":
             i += 1
@@ -452,12 +525,47 @@ def _convert(s: str) -> str:
     return "".join(out)
 
 
+def _format_math_spacing(s: str) -> str:
+    """Format spacing in math expressions for textbook-quality readability."""
+    # 1. Delimiters: no spaces immediately inside parens/brackets
+    s = re.sub(r"\(\s+", "(", s)
+    s = re.sub(r"\s+\)", ")", s)
+    s = re.sub(r"\[\s+", "[", s)
+    s = re.sub(r"\s+\]", "]", s)
+    s = re.sub(r"\{\s+", "{", s)
+    s = re.sub(r"\s+\}", "}", s)
+
+    # 2. Punctuation: comma and semicolon space after, not before
+    s = re.sub(r"\s*,\s*", ", ", s)
+    s = re.sub(r"\s*;\s*", "; ", s)
+
+    # 3. Relations: =, <, >, ≤, ≥, ≠, ≈, ≡, ∝, ∈, ∉, ⊂, ⊆, ⊇, ⊃, ∪, ∩, ⇌, →, ←, ⇒, ⟺
+    rel_pat = r"(=|<|>|≤|≥|≠|≈|≡|∝|∈|∉|⊂|⊆|⊇|⊃|∪|∩|⇌|→|←|⇒|⟺)"
+    s = re.sub(r"\s*" + rel_pat + r"\s*", r" \1 ", s)
+
+    # 4. Binary operators: +, -, ±, ∓, ×, ·, ÷
+    # Only when flanked by alphanum or closing bracket on left and alphanum/opening bracket on right
+    bin_pat = r"([A-Za-z0-9)\]\u0080-\uffff])\s*([+±∓×·÷]|(?<![=<>≤≥≠≈∈(])[−\-])\s*([A-Za-z0-9(\[\u0080-\uffff])"
+    for _ in range(2):
+        s = re.sub(bin_pat, r"\1 \2 \3", s)
+
+    # 5. Functions spacing like sin θ or cos² x
+    s = re.sub(
+        r"\b(sin|cos|tan|cot|sec|csc|sinh|cosh|tanh|ln|log|exp|det|lim)([²³ⁿ])?\s*([A-Za-zα-ωΑ-Ω])\b",
+        lambda m: f"{m.group(1)}{m.group(2) or ''} {m.group(3)}" if m.group(1) != "d" else m.group(0),
+        s,
+    )
+
+    s = re.sub(r"[ \t\u2009]{2,}", " ", s)
+    return s.strip()
+
+
 def latex_to_unicode(expr: str) -> str:
     """Transliterate a LaTeX math expression (without ``$``) to Unicode."""
     e = balance_braces(_DOUBLE_ESCAPE.sub(lambda _m: "\\", expr))
     e = e.replace("<=>", "⇌").replace("<->", "↔").replace("->", "→")
-    out = _convert(e)
-    out = re.sub(r"[ \t\u2009]{2,}", " ", out)
+    out = _convert(e, in_math=True)
+    out = _format_math_spacing(out)
     out = "\n".join(line.strip() for line in out.split("\n"))
     return out.strip()
 
@@ -478,7 +586,7 @@ def is_complex(expr: str) -> bool:
     unicode = latex_to_unicode(expr)
     if re.search(r"\)/|/\(", unicode):
         return True
-    if re.search(r"(?:\^|\\_)\([^)]{5,}\)", unicode):
+    if re.search(r"(?:\^|_)\([^)]{5,}\)", unicode):
         return True
     if len(re.findall(r"\\[dtc]?frac", expr)) >= 2 and "/" in unicode:
         return True
@@ -486,7 +594,7 @@ def is_complex(expr: str) -> bool:
 
 
 _BARE_CMD = re.compile(r"\\([A-Za-z]+)")
-_BARE_SUP = re.compile(r"(?<=[A-Za-z0-9)\]])\^(\{[^{}\n]*\}|[0-9]+|[a-z](?![a-z]))")
+_BARE_SUP = re.compile(r"(?<=[A-Za-z0-9)\]])\^(\{[^{}\n]*\}|[0-9]+|[a-z](?![a-z])|[∘°′*])")
 _BARE_SUB = re.compile(r"(?<=[A-Za-z)\]])_(\{[^{}\n]*\}|\d+)(?![A-Za-z_])")
 
 
@@ -500,13 +608,15 @@ def _convert_bare(text: str) -> str:
         name = m.group(1)
         if name in GREEK or name in SYMBOLS or name in _ARG_COMMANDS - {"begin"}:
             out.append(text[i:m.start()])
-            converted, i = _command(name, text, m.end())
+            converted, i = _command(name, text, m.end(), in_math=False)
             out.append(converted)
     out.append(text[i:])
     result = "".join(out)
 
     def sup(m: "re.Match[str]") -> str:
         raw = m.group(1).strip("{}")
+        if raw in ("∘", "°"):
+            return "°"
         return to_superscript(raw) or m.group(0)
 
     def sub(m: "re.Match[str]") -> str:

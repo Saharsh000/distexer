@@ -13,7 +13,7 @@ from .formatters.text import MODE_UNICODE_NATIVE, format_text, normalize
 
 OptionsInput = Union[None, str, Sequence[str], Sequence[Tuple[str, str]], Dict[str, str]]
 
-Q_TYPES = ("single", "multiple", "integer", "match", "numeric", "truefalse")
+Q_TYPES = ("single", "multiple", "integer", "match", "numeric", "truefalse", "assertion_reason", "statements")
 
 FOOTERS = {
     "single": "🎯 Single correct • choose ONE option",
@@ -22,6 +22,8 @@ FOOTERS = {
     "numeric": "🔢 Numerical • reply with a number",
     "match": "🔗 Match the following • choose the correct mapping",
     "truefalse": "⚖️ True or False",
+    "assertion_reason": "⚖️ Assertion & Reason • choose the correct relationship",
+    "statements": "📋 Statement I & II • choose the correct evaluation",
 }
 
 _OPTION_PREFIX = re.compile(r"^\s*\(?([A-Za-z])[).:]\s+")

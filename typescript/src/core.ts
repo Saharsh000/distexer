@@ -3,7 +3,7 @@ import { HEADER_RE, formatMatch, formatMatchOptions, parseMapping, parseMatch } 
 import { REGIONAL_INDICATORS } from "./symbols.js";
 import { MODE_UNICODE_NATIVE, type Mode, formatText, normalize } from "./text.js";
 
-export type QType = "single" | "multiple" | "integer" | "numeric" | "match" | "truefalse";
+export type QType = "single" | "multiple" | "integer" | "numeric" | "match" | "truefalse" | "assertion_reason" | "statements";
 export type OptionsInput = string | string[] | [string, string][] | Record<string, string> | null | undefined;
 
 export const FOOTERS: Record<QType, string> = {
@@ -13,6 +13,8 @@ export const FOOTERS: Record<QType, string> = {
   numeric: "🔢 Numerical • reply with a number",
   match: "🔗 Match the following • choose the correct mapping",
   truefalse: "⚖️ True or False",
+  assertion_reason: "⚖️ Assertion & Reason • choose the correct relationship",
+  statements: "📋 Statement I & II • choose the correct evaluation",
 };
 
 export interface QuestionLayout {

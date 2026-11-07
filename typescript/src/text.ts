@@ -163,15 +163,39 @@ function script(text: string, sup: boolean): string {
   if (sup && (t === "∘" || t === "°")) return "°";
   const mapped = sup ? toSuperscript(t) : toSubscript(t);
   if (mapped !== null) return mapped;
+  if (!sup && t.includes("→")) return ` (${t})`;
   const wrapped = Array.from(t).length === 1 ? t : `(${t})`;
-  return (sup ? "^" : "\\_") + wrapped;
+  return (sup ? "^" : "_") + wrapped;
 }
 
-const isLooseAtomic = (t: string): boolean =>
-  !!t && !Array.from(t).some((c) => /\s/.test(c) || OPERATOR_CHARS.has(c));
+const isLooseAtomic = (text: string): boolean => {
+  const t = text.trim();
+  if (!t) return false;
+  if (t.startsWith("(") && t.endsWith(")")) {
+    let depth = 0;
+    let balanced = true;
+    for (let idx = 0; idx < t.length; idx++) {
+      if (t[idx] === "(") depth++;
+      else if (t[idx] === ")") {
+        depth--;
+        if (depth === 0 && idx < t.length - 1) {
+          balanced = false;
+          break;
+        }
+      }
+    }
+    if (balanced && depth === 0) return true;
+  }
+  if (/^(\w+|\([^)]+\))(\([^)]+\))+$/.test(t)) return true;
+  if (/^[∂dΔ]\w*(?:[²³ⁿ])?$/.test(t)) return true;
+  return !Array.from(t).some((c) => /\s/.test(c) || OPERATOR_CHARS.has(c));
+};
 
-const isStrictAtomic = (t: string): boolean => {
+const isStrictAtomic = (text: string): boolean => {
+  const t = text.trim();
   if (/^\d+(?:\.\d+)?$/.test(t)) return true;
+  if (/^[d∂Δ][a-zA-Z](?:[²³ⁿ])?$/.test(t)) return true;
+  if (t.length === 1 && !OPERATOR_CHARS.has(t)) return true;
   const chars = Array.from(t);
   return chars.length >= 1 && !OPERATOR_CHARS.has(chars[0]) && chars.slice(1).every((c) => SCRIPT_CHARS.has(c));
 };
@@ -209,21 +233,29 @@ function bold(text: string): string {
     .join("");
 }
 
-function accent(text: string, mark: string): string {
+function accent(text: string, mark: string, name = ""): string {
   if (!text) return "";
+  if (name === "hat") {
+    if (text === "i") return "î";
+    if (text === "j") return "ĵ";
+    if (text === "k") return "k̂";
+  }
   if (["\u0305", "\u0332", "\u0338"].includes(mark)) return Array.from(text).map((c) => c + mark).join("");
   return text + mark;
 }
 
 function chem(arg: string): string {
-  let t = arg
+  let t = arg;
+  t = t.replace(/\s*[.*]\s*(?=\d*H2O|\d*[A-Z])/g, " · ");
+  t = t.replace(/->\[([^\]]+)\]/g, (_m, c: string) => ` —${c.replace(/\\Delta/g, "Δ")}→ `);
+  t = t
     .replace(/<=>/g, "\\rightleftharpoons ")
     .replace(/<->/g, "\\leftrightarrow ")
     .replace(/->/g, "\\to ")
     .replace(/<-/g, "\\gets ");
   t = t.replace(/(?<=[A-Za-z)\]])(\d+)/g, (_m, d: string) => `_{${d}}`);
-  t = t.replace(/(?<=[A-Za-z)\]}])(\d*[+-])(?=\s|$)/g, (_m, c: string) => `^{${c}}`);
-  return convert(t);
+  t = t.replace(/(?<=[A-Za-z)\]}])(\d*[+-])(?=\s|$|[+→⇌])/g, (_m, c: string) => `^{${c}}`);
+  return convert(t, true);
 }
 
 function environment(env: string, bodyRaw: string): string {
@@ -234,11 +266,21 @@ function environment(env: string, bodyRaw: string): string {
     base = "matrix";
   }
   const rows = body.split(/\\\\(?:\[[^\]]*\])?/).filter((r) => r.trim());
-  const cells = rows.map((r) => r.split(/(?<!\\)&/).map((c) => convert(c).trim()));
+  const cells = rows.map((r) => r.split(/(?<!\\)&/).map((c) => convert(c, true).trim()));
   const delims = MATRIX_DELIMS[base];
   if (delims) return delims[0] + cells.map((r) => r.join(", ")).join("; ") + delims[1];
   if (["cases", "dcases", "rcases"].includes(base)) {
-    return "{ " + cells.map((r) => r.filter(Boolean).join(" ")).join("; ") + " }";
+    const formattedRows = cells.map((row) => {
+      if (!row.length) return "";
+      if (row.length === 1) return row[0];
+      const exprPart = row[0].trim();
+      const condPart = row.slice(1).join(" ").trim();
+      if (exprPart.endsWith(",") || condPart.startsWith("if ") || condPart.startsWith("for ")) {
+        return `${exprPart}  ${condPart}`.trim();
+      }
+      return `${exprPart},  ${condPart}`.trim();
+    }).filter(Boolean);
+    return "{ " + formattedRows.join("; ") + " }";
   }
   return cells.map((r) => r.filter(Boolean).join(" ")).join("\n");
 }
@@ -263,33 +305,33 @@ function findEnvEnd(s: string, j: number, env: string): [string, number] {
   }
 }
 
-function command(name: string, s: string, j0: number): [string, number] {
+function command(name: string, s: string, j0: number, inMath = true): [string, number] {
   let j = j0;
   let a: string;
   let b: string;
   if (FRAC_COMMANDS.has(name)) {
     [a, j] = readArg(s, j);
     [b, j] = readArg(s, j);
-    return [fraction(convert(a), convert(b)), j];
+    return [fraction(convert(a, inMath), convert(b, inMath)), j];
   }
   if (["binom", "dbinom", "tbinom"].includes(name)) {
     [a, j] = readArg(s, j);
     [b, j] = readArg(s, j);
-    return [`C(${convert(a).trim()}, ${convert(b).trim()})`, j];
+    return [`C(${convert(a, inMath).trim()}, ${convert(b, inMath).trim()})`, j];
   }
   if (name === "sqrt") {
     let idx: string | null;
     [idx, j] = readOptional(s, j);
     [a, j] = readArg(s, j);
-    return [sqrt(idx !== null ? convert(idx) : null, convert(a)), j];
+    return [sqrt(idx !== null ? convert(idx, inMath) : null, convert(a, inMath)), j];
   }
   if (TEXT_COMMANDS.has(name)) {
     [a, j] = readArg(s, j);
-    return [name.startsWith("text") || name === "mbox" ? a : convert(a), j];
+    return [convert(a, inMath), j];
   }
   if (BOLD_COMMANDS.has(name)) {
     [a, j] = readArg(s, j);
-    return [bold(convert(a)), j];
+    return [bold(convert(a, inMath)), j];
   }
   if (name === "mathbb") {
     [a, j] = readArg(s, j);
@@ -297,7 +339,7 @@ function command(name: string, s: string, j0: number): [string, number] {
   }
   if (name in ACCENTS) {
     [a, j] = readArg(s, j);
-    return [accent(convert(a).trim(), ACCENTS[name]), j];
+    return [accent(convert(a, inMath).trim(), ACCENTS[name], name), j];
   }
   if (name === "ce" || name === "pu") {
     [a, j] = readArg(s, j);
@@ -306,30 +348,30 @@ function command(name: string, s: string, j0: number): [string, number] {
   if (name === "xrightarrow" || name === "xleftarrow") {
     [, j] = readOptional(s, j);
     [a, j] = readArg(s, j);
-    const label = convert(a).trim();
+    const label = convert(a, inMath).trim();
     const arrow = name === "xrightarrow" ? "→" : "←";
     return [label ? ` —${label}${arrow} ` : ` ${arrow} `, j];
   }
   if (["overset", "stackrel", "underset"].includes(name)) {
     [a, j] = readArg(s, j);
     [b, j] = readArg(s, j);
-    const top = convert(a).trim();
-    const base = convert(b).trim();
+    const top = convert(a, inMath).trim();
+    const base = convert(b, inMath).trim();
     if (["→", "←", "⇌", "⟶", "="].includes(base)) return [` —${top}${base} `, j];
     return [base + script(top, name !== "underset"), j];
   }
   if (["overbrace", "underbrace", "boxed"].includes(name)) {
     [a, j] = readArg(s, j);
-    return [name === "boxed" ? `[${convert(a)}]` : convert(a), j];
+    return [name === "boxed" ? `[${convert(a, inMath)}]` : convert(a, inMath), j];
   }
   if (name === "textcolor") {
     [, j] = readArg(s, j);
     [a, j] = readArg(s, j);
-    return [convert(a), j];
+    return [convert(a, inMath), j];
   }
   if (name === "pmod") {
     [a, j] = readArg(s, j);
-    return [` (mod ${convert(a).trim()})`, j];
+    return [` (mod ${convert(a, inMath).trim()})`, j];
   }
   if (name === "begin") {
     let env: string;
@@ -343,20 +385,35 @@ function command(name: string, s: string, j0: number): [string, number] {
     return ["", j];
   }
   if (IGNORED.has(name)) {
-    if ((["left", "right", "middle"].includes(name) || /^big|^Big/.test(name)) && s[j] === ".") j++;
+    if (["left", "right", "middle"].includes(name) || /^big|^Big/.test(name)) {
+      while (j < s.length && s[j] === " ") j++;
+      if (j < s.length && s[j] === ".") j++;
+    }
     return ["", j];
   }
   if (name === "bmod" || name === "mod") return [" mod ", j];
+  if (name === "partial") {
+    if (inMath && s[j] === " " && isLetter(s[j + 1])) j++;
+    return ["∂", j];
+  }
+  if (name === "Delta") {
+    if (inMath && s[j] === " " && isLetter(s[j + 1]) && (/[A-Z]/.test(s[j + 1]) || !isLetter(s[j + 2]))) j++;
+    return ["Δ", j];
+  }
+  if (name === "nabla") {
+    if (inMath && s[j] === " " && isLetter(s[j + 1]) && !isLetter(s[j + 2])) j++;
+    return ["∇", j];
+  }
   if (FUNCTIONS.has(name)) return [name, j];
   if (name in GREEK) {
-    if (s[j] === " " && /[A-Za-z0-9]/.test(s[j + 1] ?? "")) j++;
+    if (inMath && s[j] === " " && isLetter(s[j + 1]) && !isLetter(s[j + 2])) j++;
     return [GREEK[name], j];
   }
   if (name in SYMBOLS) return [SYMBOLS[name], j];
   return [name, j];
 }
 
-function convert(s: string): string {
+function convert(s: string, inMath = true): string {
   let out = "";
   let i = 0;
   while (i < s.length) {
@@ -365,7 +422,7 @@ function convert(s: string): string {
       if (isLetter(s[i + 1])) {
         let j = i + 1;
         while (isLetter(s[j])) j++;
-        const [text, next] = command(s.slice(i + 1, j), s, j);
+        const [text, next] = command(s.slice(i + 1, j), s, j, inMath);
         out += text;
         i = next;
         continue;
@@ -380,13 +437,13 @@ function convert(s: string): string {
     }
     if (c === "^" || c === "_") {
       const [arg, next] = readArg(s, i + 1);
-      out += script(convert(arg), c === "^");
+      out += script(convert(arg, inMath), c === "^");
       i = next;
       continue;
     }
     if (c === "{") {
       const [content, next] = readGroup(s, i);
-      out += convert(content);
+      out += convert(content, inMath);
       i = next;
       continue;
     }
@@ -400,14 +457,39 @@ function convert(s: string): string {
   return out;
 }
 
+function formatMathSpacing(s: string): string {
+  let res = s
+    .replace(/\(\s+/g, "(")
+    .replace(/\s+\)/g, ")")
+    .replace(/\[\s+/g, "[")
+    .replace(/\s+\]/g, "]")
+    .replace(/\{\s+/g, "{")
+    .replace(/\s+\}/g, "}")
+    .replace(/\s*,\s*/g, ", ")
+    .replace(/\s*;\s*/g, "; ");
+
+  const relPat = /(=|<|>|≤|≥|≠|≈|≡|∝|∈|∉|⊂|⊆|⊇|⊃|∪|∩|⇌|→|←|⇒|⟺)/g;
+  res = res.replace(relPat, " $1 ").replace(/[ \t]{2,}/g, " ");
+
+  const binPat = /([A-Za-z0-9)\]\u0080-\uffff])\s*([+±∓×·÷]|(?<![=<>≤≥≠≈∈(])[−\-])\s*([A-Za-z0-9(\[\u0080-\uffff])/g;
+  res = res.replace(binPat, "$1 $2 $3").replace(binPat, "$1 $2 $3");
+
+  res = res.replace(
+    /\b(sin|cos|tan|cot|sec|csc|sinh|cosh|tanh|ln|log|exp|det|lim)([²³ⁿ])?\s*([A-Za-zα-ωΑ-Ω])\b/g,
+    (_m, fn: string, pow: string | undefined, arg: string) => `${fn}${pow ?? ""} ${arg}`,
+  );
+
+  return res.replace(/[ \t\u2009]{2,}/g, " ").trim();
+}
+
 /** Transliterate a LaTeX math expression (without `$`) to Unicode. */
 export function latexToUnicode(expr: string): string {
   const e = balanceBraces(expr.replace(DOUBLE_ESCAPE, "\\"))
     .replace(/<=>/g, "⇌")
     .replace(/<->/g, "↔")
     .replace(/->/g, "→");
-  return convert(e)
-    .replace(/[ \t\u2009]{2,}/g, " ")
+  const out = formatMathSpacing(convert(e, true));
+  return out
     .split("\n")
     .map((l) => l.trim())
     .join("\n")
@@ -421,7 +503,7 @@ export function isComplex(expr: string): boolean {
   if (/\\(?:overset|underset|stackrel|overbrace|underbrace)/.test(expr)) return true;
   const u = latexToUnicode(expr);
   if (/\)\/|\/\(/.test(u)) return true;
-  if (/(?:\^|\\_)\([^)]{5,}\)/.test(u)) return true;
+  if (/(?:\^|_)\([^)]{5,}\)/.test(u)) return true;
   if ((expr.match(/\\[dtc]?frac/g) ?? []).length >= 2 && u.includes("/")) return true;
   return false;
 }
@@ -435,16 +517,18 @@ function convertBare(text: string): string {
     const name = m[1];
     if (name in GREEK || name in SYMBOLS || ARG_COMMANDS.has(name)) {
       out += text.slice(i, start);
-      const [converted, next] = command(name, text, start + m[0].length);
+      const [converted, next] = command(name, text, start + m[0].length, false);
       out += converted;
       i = next;
     }
   }
   out += text.slice(i);
   return out
-    .replace(/(?<=[A-Za-z0-9)\]])\^(\{[^{}\n]*\}|[0-9]+|[a-z](?![a-z]))/g, (m, g: string) =>
-      toSuperscript(g.replace(/[{}]/g, "")) ?? m,
-    )
+    .replace(/(?<=[A-Za-z0-9)\]])\^(\{[^{}\n]*\}|[0-9]+|[a-z](?![a-z])|[∘°′*])/g, (m, g: string) => {
+      const raw = g.replace(/[{}]/g, "");
+      if (raw === "∘" || raw === "°") return "°";
+      return toSuperscript(raw) ?? m;
+    })
     .replace(/(?<=[A-Za-z)\]])_(\{[^{}\n]*\}|\d+)(?![A-Za-z_])/g, (m, g: string) =>
       toSubscript(g.replace(/[{}]/g, "")) ?? m,
     );
