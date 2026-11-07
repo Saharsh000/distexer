@@ -9,7 +9,13 @@ from typing import TYPE_CHECKING, Dict, Optional, Tuple, Union
 
 from ..core import OptionsInput, QuestionLayout, build_question
 from ..formatters.text import MODE_UNICODE_NATIVE
-from ..renderer.engine import MathRenderer, RenderConfig, RenderError
+from ..renderer.engine import (
+    MathRenderer,
+    RenderConfig,
+    RenderError,
+    arender_question_card,
+    render_question_card,
+)
 from ..themes import Theme, get_theme
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -153,3 +159,92 @@ async def arender_formula(
 ) -> "discord.File":
     """Async version of :func:`render_formula`."""
     return _discord().File(await renderer_for(theme).arender(expr), filename=filename)
+
+
+def create_question_card_embed(
+    title: str,
+    question: str,
+    options: OptionsInput = None,
+    *,
+    subject: str = "",
+    chapter: str = "",
+    description: str = "",
+    theme: Union[str, Theme] = "discord_dark",
+    color: Optional[int] = None,
+    footer: Optional[str] = None,
+    url: Optional[str] = None,
+    filename: str = "question.png",
+    fontsize: int = 22,
+    dpi: int = 200,
+) -> Tuple["discord.Embed", "discord.File"]:
+    """Render a full-size textbook question card image and build its Discord embed.
+
+    The question and its formulas are rendered as a large, crystal-clear PNG
+    image attachment and set as ``embed.image`` so users on both mobile and
+    desktop can read textbook equations without zooming.
+    """
+    discord = _discord()
+    resolved = get_theme(theme)
+    png_buf = render_question_card(
+        question,
+        options,
+        subject=subject,
+        chapter=chapter,
+        fontsize=fontsize,
+        dpi=dpi,
+        bg_color=resolved.background or "#1E1F22",
+        text_color=resolved.text_color,
+    )
+    file = discord.File(png_buf, filename=filename)
+    embed = discord.Embed(
+        title=_truncate(title, EMBED_TITLE_LIMIT) if title else None,
+        description=_truncate(description, EMBED_DESCRIPTION_LIMIT) if description else None,
+        color=color if color is not None else resolved.embed_color,
+        url=url,
+    )
+    embed.set_image(url=f"attachment://{filename}")
+    if footer:
+        embed.set_footer(text=footer)
+    return embed, file
+
+
+async def acreate_question_card_embed(
+    title: str,
+    question: str,
+    options: OptionsInput = None,
+    *,
+    subject: str = "",
+    chapter: str = "",
+    description: str = "",
+    theme: Union[str, Theme] = "discord_dark",
+    color: Optional[int] = None,
+    footer: Optional[str] = None,
+    url: Optional[str] = None,
+    filename: str = "question.png",
+    fontsize: int = 22,
+    dpi: int = 200,
+) -> Tuple["discord.Embed", "discord.File"]:
+    """Async version of :func:`create_question_card_embed` (runs rendering off-thread)."""
+    discord = _discord()
+    resolved = get_theme(theme)
+    png_buf = await arender_question_card(
+        question,
+        options,
+        subject=subject,
+        chapter=chapter,
+        fontsize=fontsize,
+        dpi=dpi,
+        bg_color=resolved.background or "#1E1F22",
+        text_color=resolved.text_color,
+    )
+    file = discord.File(png_buf, filename=filename)
+    embed = discord.Embed(
+        title=_truncate(title, EMBED_TITLE_LIMIT) if title else None,
+        description=_truncate(description, EMBED_DESCRIPTION_LIMIT) if description else None,
+        color=color if color is not None else resolved.embed_color,
+        url=url,
+    )
+    embed.set_image(url=f"attachment://{filename}")
+    if footer:
+        embed.set_footer(text=footer)
+    return embed, file

@@ -136,3 +136,19 @@ def test_horizontal_fraction_bar():
 
     dfrac = distexer.format_text(r"Value: $\dfrac{a + b}{c}$")
     assert "─" in dfrac
+
+
+def test_render_question_card():
+    buf = distexer.render_question_card(
+        question=r"A particle executes SHM: $x = A \cos(\omega t)$. Find $E = \frac{1}{2}m\omega^2 A^2$.",
+        options=[
+            {"key": "A", "text": r"$E = \frac{1}{2}kA^2$"},
+            {"key": "B", "text": r"$E = kA^2$"},
+        ],
+        subject="Physics",
+        chapter="Oscillations",
+        fontsize=20,
+    )
+    val = buf.getvalue()
+    assert len(val) > 1000
+    assert val.startswith(b"\x89PNG")

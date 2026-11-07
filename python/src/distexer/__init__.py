@@ -14,7 +14,14 @@ Quick start::
 """
 
 from .core import FOOTERS, Q_TYPES, QuestionLayout, badge, build_question, format_message
-from .discord.embeds import acreate_question_embed, arender_formula, create_question_embed, render_formula
+from .discord.embeds import (
+    acreate_question_card_embed,
+    acreate_question_embed,
+    arender_formula,
+    create_question_card_embed,
+    create_question_embed,
+    render_formula,
+)
 from .formatters import (
     MODE_PRESERVE_KATEX,
     MODE_UNICODE_NATIVE,
@@ -32,7 +39,14 @@ from .formatters import (
     parse_match,
     split_options,
 )
-from .renderer import MathRenderer, RenderConfig, RenderError, render_png
+from .renderer import (
+    MathRenderer,
+    RenderConfig,
+    RenderError,
+    arender_question_card,
+    render_png,
+    render_question_card,
+)
 from .themes import THEMES, Theme, get_theme
 
 __version__ = "0.1.0"
@@ -50,11 +64,14 @@ __all__ = [
     "THEMES",
     "Theme",
     "__version__",
+    "acreate_question_card_embed",
     "acreate_question_embed",
     "arender_formula",
+    "arender_question_card",
     "badge",
     "build_match",
     "build_question",
+    "create_question_card_embed",
     "create_question_embed",
     "find_math",
     "format_fraction_bar",
@@ -70,5 +87,6 @@ __all__ = [
     "parse_match",
     "render_formula",
     "render_png",
+    "render_question_card",
     "split_options",
 ]

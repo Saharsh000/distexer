@@ -259,3 +259,170 @@ def render_png(expr: str, **config: Any) -> io.BytesIO:
     """Shortcut: ``distexer.render_png(r"\\frac{a}{b}")`` → PNG ``BytesIO``."""
     renderer = MathRenderer(**config) if config else default_renderer()
     return renderer.render(expr)
+
+
+def clean_card_mathtext(s: str) -> str:
+    """Normalize equations and chemistry tags for Matplotlib mathtext rendering."""
+    s = s.replace("$$", "$")
+
+    # Convert \ce{...}
+    def rep_ce(m: "re.Match[str]") -> str:
+        inner = m.group(1).strip()
+        inner = inner.replace("->", r" \rightarrow ").replace("<=>", r" \rightleftharpoons ")
+        inner = re.sub(r"([A-Za-z])(\d+)", r"\1_{\2}", inner)
+        inner = inner.replace(" . ", r" \cdot ")
+        return rf"\mathrm{{{inner}}}"
+
+    s = re.sub(r"\\ce\{([^}]+)\}", rep_ce, s)
+    s = re.sub(r"\\frac(?![a-z])", r"\\dfrac", s)
+    s = re.sub(r"\\le(?![a-z])", r"\\leq", s)
+    s = re.sub(r"\\ge(?![a-z])", r"\\geq", s)
+    s = re.sub(r"\\ne(?![a-z])", r"\\neq", s)
+    s = re.sub(r"\\degree\b", r"^{\\circ}", s)
+    return s
+
+
+def wrap_text_with_math(text: str, max_chars: int = 52) -> List[str]:
+    """Break text into lines while keeping math tokens atomic."""
+    raw_tokens: List[str] = []
+    pattern = re.compile(r"(\$[^\$]+\$|\S+)")
+    for m in pattern.finditer(text):
+        raw_tokens.append(m.group(0))
+
+    # Merge isolated punctuation with preceding token
+    tokens: List[str] = []
+    for tok in raw_tokens:
+        if tokens and tok in (",", ".", ";", ":", "?", "!"):
+            tokens[-1] += tok
+        else:
+            tokens.append(tok)
+
+    lines: List[str] = []
+    curr: List[str] = []
+    curr_len = 0
+    for tok in tokens:
+        vis = re.sub(r"\\[A-Za-z]+|\$|[{}]", "", tok)
+        tok_len = max(len(vis), 1)
+        if curr and (curr_len + tok_len + 1 > max_chars):
+            lines.append(" ".join(curr))
+            curr = [tok]
+            curr_len = tok_len
+        else:
+            curr.append(tok)
+            curr_len += tok_len + (1 if len(curr) > 1 else 0)
+    if curr:
+        lines.append(" ".join(curr))
+    return lines
+
+
+def render_question_card(
+    question: str,
+    options: Any = None,
+    *,
+    subject: str = "",
+    chapter: str = "",
+    fontsize: int = 22,
+    dpi: int = 200,
+    bg_color: str = "#1E1F22",
+    text_color: str = "#FFFFFF",
+    max_chars: int = 52,
+) -> io.BytesIO:
+    """Render a full textbook-style STEM question card (+ options) into a high-res PNG image.
+
+    Designed specifically for Discord embed images so mobile and desktop users
+    can read questions effortlessly without zooming.
+    """
+    try:
+        from matplotlib.backends.backend_agg import FigureCanvasAgg  # noqa: PLC0415
+        from matplotlib.figure import Figure  # noqa: PLC0415
+        import matplotlib  # noqa: PLC0415
+    except ImportError as exc:
+        raise RenderError("matplotlib is required to render question cards (pip install matplotlib)") from exc
+
+    lines: List[str] = []
+
+    # 1. Subject Header
+    hdr = "   •   ".join(p for p in (subject.upper(), chapter) if p)
+    if hdr:
+        lines.append(hdr)
+        lines.append("―" * 44)
+        lines.append("")
+
+    # 2. Question text wrapped
+    q_clean = clean_card_mathtext(question)
+    q_wrapped = wrap_text_with_math(q_clean, max_chars=max_chars)
+    lines.extend(q_wrapped)
+
+    # 3. Options
+    if options:
+        lines.append("")
+        lines.append("―" * 44)
+        for opt in options:
+            if isinstance(opt, dict):
+                k = opt.get("key", "")
+                txt = opt.get("text", "").strip()
+            elif isinstance(opt, tuple):
+                k, txt = opt
+            else:
+                k, txt = "", str(opt).strip()
+            txt_clean = clean_card_mathtext(txt)
+            if txt_clean.startswith("$") and txt_clean.endswith("$"):
+                math_content = txt_clean[1:-1]
+                lines.append(rf"$\mathbf{{({k})}}\quad {math_content}$")
+            else:
+                lines.append(rf"$\mathbf{{({k})}}\quad$ {txt_clean}")
+
+    card_text = "\n".join(lines)
+
+    # Figure height directly proportional to line count
+    num_lines = len(lines)
+    fig_width = 9.5
+    fig_height = max(2.5, (num_lines * 0.32) + 0.6)
+
+    fig = Figure(figsize=(fig_width, fig_height), dpi=dpi)
+    FigureCanvasAgg(fig)
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.axis("off")
+    fig.patch.set_facecolor(bg_color)
+
+    with matplotlib.rc_context({"mathtext.fontset": "cm"}):
+        ax.text(
+            0.05, 0.94, card_text,
+            color=text_color,
+            fontsize=fontsize,
+            va="top",
+            ha="left",
+            linespacing=1.65,
+        )
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", facecolor=bg_color, bbox_inches="tight", pad_inches=0.3)
+    buf.seek(0)
+    return buf
+
+
+async def arender_question_card(
+    question: str,
+    options: Any = None,
+    *,
+    subject: str = "",
+    chapter: str = "",
+    fontsize: int = 22,
+    dpi: int = 200,
+    bg_color: str = "#1E1F22",
+    text_color: str = "#FFFFFF",
+    max_chars: int = 52,
+) -> io.BytesIO:
+    """Async version of :func:`render_question_card` (runs off-thread)."""
+    return await asyncio.to_thread(
+        render_question_card,
+        question,
+        options,
+        subject=subject,
+        chapter=chapter,
+        fontsize=fontsize,
+        dpi=dpi,
+        bg_color=bg_color,
+        text_color=text_color,
+        max_chars=max_chars,
+    )
